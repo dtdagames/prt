@@ -38,7 +38,10 @@ function parseDate(str) {
 function formatDateFR(str) {
   const d = parseDate(str);
   if (!d || isNaN(d.getTime())) return '-';
-  return d.toLocaleDateString('fr-FR');
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  return `${day}-${month}-${year}`;
 }
 
 function computeTimeline(lots, weeksPerSprint) {
@@ -177,14 +180,6 @@ export default function RoadmapView() {
           <h1>{roadmap.name}</h1>
           <p style={{ color: 'var(--gray-500)', fontSize: '0.9rem' }}>
             {roadmap.weeks_per_sprint} semaines par sprint
-            {roadmap.google_sheet_url && (
-              <>
-                {' '} &middot;{' '}
-                <a href={roadmap.google_sheet_url} target="_blank" rel="noopener noreferrer">
-                  Voir le Google Sheet
-                </a>
-              </>
-            )}
           </p>
         </div>
         {canEdit && (
@@ -202,10 +197,7 @@ export default function RoadmapView() {
                 <thead>
                   <tr>
                     <th className="sticky-col" style={{ left: 0, minWidth: 130 }}>Lot</th>
-                    <th className="sticky-col" style={{ left: 130, minWidth: 90 }}>Debut</th>
-                    <th className="sticky-col" style={{ left: 220, minWidth: 60 }}>Sprints</th>
-                    <th className="sticky-col" style={{ left: 280, minWidth: 90 }}>Tests</th>
-                    <th className="sticky-col" style={{ left: 370, minWidth: 90 }}>Activation</th>
+                    <th className="sticky-col" style={{ left: 130, minWidth: 100 }}>Debut</th>
                     {weeks.map(w => (
                       <th key={`${w.year}-${w.week}`}>S{w.week}</th>
                     ))}
@@ -216,9 +208,6 @@ export default function RoadmapView() {
                     <tr key={i}>
                       <td className="lot-name" style={{ left: 0 }}>{lot.name}</td>
                       <td className="lot-info" style={{ left: 130 }}>{formatDateFR(lot.start_date)}</td>
-                      <td className="lot-info" style={{ left: 220, textAlign: 'center' }}>{lot.sprint_count}</td>
-                      <td className="lot-info" style={{ left: 280 }}>{formatDateFR(lot.test_date)}</td>
-                      <td className="lot-info" style={{ left: 370 }}>{formatDateFR(lot.activation_date)}</td>
                       {weeks.map(w => {
                         const key = `${w.year}-${w.week}`;
                         const phase = phases[key];

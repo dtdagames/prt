@@ -29,7 +29,6 @@ export default function RoadmapCreate() {
   const [project, setProject] = useState(null);
   const [form, setForm] = useState({
     name: '',
-    google_sheet_url: '',
     weeks_per_sprint: 2,
   });
   const [lots, setLots] = useState([]);
@@ -42,7 +41,6 @@ export default function RoadmapCreate() {
       api.getRoadmap(id).then(data => {
         setForm({
           name: data.name,
-          google_sheet_url: data.google_sheet_url || '',
           weeks_per_sprint: data.weeks_per_sprint,
         });
         setLots(data.lots.map(l => ({
@@ -109,7 +107,6 @@ export default function RoadmapCreate() {
       const data = {
         project_id: parseInt(projectId),
         name: form.name,
-        google_sheet_url: form.google_sheet_url || null,
         weeks_per_sprint: parseInt(form.weeks_per_sprint),
         lots: lots.filter(l => l.name),
       };
@@ -169,15 +166,6 @@ export default function RoadmapCreate() {
                 max="12"
               />
             </div>
-          </div>
-          <div className="form-group">
-            <label>URL Google Sheet (optionnel)</label>
-            <input
-              className="form-control"
-              value={form.google_sheet_url}
-              onChange={e => setForm({ ...form, google_sheet_url: e.target.value })}
-              placeholder="https://docs.google.com/spreadsheets/d/..."
-            />
           </div>
         </div>
 

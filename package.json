@@ -1,0 +1,12 @@
+{
+  "name": "planroad",
+  "version": "1.0.0",
+  "description": "PlanRoad - Plateforme de gestion de roadmaps projets",
+  "private": true,
+  "scripts": {
+    "install:all": "cd frontend && npm install && cd ../backend && npm install",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm start",
+    "build": "cd frontend && npm run build"
+  }
+}

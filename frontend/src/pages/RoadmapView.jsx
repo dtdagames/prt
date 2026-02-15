@@ -4,6 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { api } from '../api';
 import { ChevronRight, Pencil } from 'lucide-react';
 
+const MONTH_NAMES = ['Jan', 'Fev', 'Mar', 'Avr', 'Mai', 'Jun', 'Jul', 'Aou', 'Sep', 'Oct', 'Nov', 'Dec'];
+const QUARTER_NAMES = ['T1', 'T2', 'T3', 'T4'];
+
 function getWeekNumber(date) {
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -12,22 +15,12 @@ function getWeekNumber(date) {
   return Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
 }
 
-function getMondayOfWeek(year, week) {
-  const jan1 = new Date(year, 0, 1);
-  const days = (week - 1) * 7;
-  const dayOfWeek = jan1.getDay() || 7;
-  const monday = new Date(year, 0, 1 + days - (dayOfWeek - 1));
-  return monday;
-}
-
 function parseDate(str) {
   if (!str) return null;
-  // Handle YYYY-MM-DD
   if (str.includes('-')) {
     const [y, m, d] = str.split('-').map(Number);
     return new Date(y, m - 1, d);
   }
-  // Handle DD/MM/YYYY
   const parts = str.split('/');
   if (parts.length === 3) {
     return new Date(parts[2], parts[1] - 1, parts[0]);
@@ -44,13 +37,28 @@ function formatDateFR(str) {
   return `${day}-${month}-${year}`;
 }
 
-function computeTimeline(lots, weeksPerSprint) {
-  if (!lots || lots.length === 0) return { weeks: [], lotData: [] };
+// Returns the dominant phase for a set of week keys
+function dominantPhase(weekKeys, phases) {
+  const counts = { dev: 0, test: 0, activation: 0 };
+  for (const key of weekKeys) {
+    const p = phases[key];
+    if (p) counts[p]++;
+  }
+  // Priority: activation > test > dev (if any present)
+  if (counts.activation > 0) return 'activation';
+  if (counts.test > 0) return 'test';
+  if (counts.dev > 0) return 'dev';
+  return null;
+}
+
+// Build week-level phases for all lots
+function computeWeekPhases(lots, weeksPerSprint) {
+  if (!lots || lots.length === 0) return { allWeeks: [], lotPhases: [] };
 
   let minWeek = Infinity, maxWeek = -Infinity;
   let minYear = Infinity, maxYear = -Infinity;
 
-  const lotData = lots.map(lot => {
+  const lotPhases = lots.map(lot => {
     const startDate = parseDate(lot.start_date);
     const testDate = parseDate(lot.test_date);
     const activationDate = parseDate(lot.activation_date);
@@ -59,17 +67,9 @@ function computeTimeline(lots, weeksPerSprint) {
       return { lot, phases: {} };
     }
 
-    const startWeek = getWeekNumber(startDate);
-    const startYear = startDate.getFullYear();
-
-    // Dev phase: from start_date for sprint_count * weeks_per_sprint weeks
     const devWeeks = lot.sprint_count * weeksPerSprint;
-    const devEnd = new Date(startDate);
-    devEnd.setDate(devEnd.getDate() + devWeeks * 7 - 1);
-
     const phases = {};
 
-    // Mark dev weeks
     for (let w = 0; w < devWeeks; w++) {
       const d = new Date(startDate);
       d.setDate(d.getDate() + w * 7);
@@ -81,7 +81,6 @@ function computeTimeline(lots, weeksPerSprint) {
       if (yr > maxYear || (yr === maxYear && wk > maxWeek)) { maxYear = yr; maxWeek = wk; }
     }
 
-    // Mark test weeks (from test_date to activation_date - 1 day, or just the test_date week)
     if (testDate && !isNaN(testDate.getTime())) {
       const testEnd = activationDate && !isNaN(activationDate.getTime()) ? new Date(activationDate) : new Date(testDate);
       testEnd.setDate(testEnd.getDate() + 6);
@@ -97,7 +96,6 @@ function computeTimeline(lots, weeksPerSprint) {
       }
     }
 
-    // Mark activation weeks
     if (activationDate && !isNaN(activationDate.getTime())) {
       const wk = getWeekNumber(activationDate);
       const yr = activationDate.getFullYear();
@@ -110,35 +108,74 @@ function computeTimeline(lots, weeksPerSprint) {
     return { lot, phases };
   });
 
-  // Build week columns: from minWeek-1 to maxWeek+1
-  const weeks = [];
+  const allWeeks = [];
   if (minYear <= maxYear && minWeek <= 53 && maxWeek >= 1) {
     const safeMinWeek = Math.max(1, minWeek - 1);
     const safeMaxWeek = Math.min(53, maxWeek + 2);
 
     if (minYear === maxYear) {
       for (let w = safeMinWeek; w <= safeMaxWeek; w++) {
-        weeks.push({ year: minYear, week: w });
+        allWeeks.push({ year: minYear, week: w });
       }
     } else {
-      // From minWeek to end of minYear
       for (let w = safeMinWeek; w <= 52; w++) {
-        weeks.push({ year: minYear, week: w });
+        allWeeks.push({ year: minYear, week: w });
       }
-      // Full intermediate years
       for (let y = minYear + 1; y < maxYear; y++) {
         for (let w = 1; w <= 52; w++) {
-          weeks.push({ year: y, week: w });
+          allWeeks.push({ year: y, week: w });
         }
       }
-      // From start of maxYear to maxWeek
       for (let w = 1; w <= safeMaxWeek; w++) {
-        weeks.push({ year: maxYear, week: w });
+        allWeeks.push({ year: maxYear, week: w });
       }
     }
   }
 
-  return { weeks, lotData };
+  return { allWeeks, lotPhases };
+}
+
+// Group weeks into months: { year, month (0-based), weekKeys[] }
+function groupByMonth(allWeeks) {
+  const map = new Map();
+  for (const w of allWeeks) {
+    // Approximate: week 1 = Jan, etc. Use Jan 1 + (week-1)*7 to get month
+    const approxDate = new Date(w.year, 0, 1 + (w.week - 1) * 7);
+    const m = approxDate.getMonth();
+    const yr = approxDate.getFullYear();
+    const key = `${yr}-${m}`;
+    if (!map.has(key)) map.set(key, { year: yr, month: m, weekKeys: [] });
+    map.get(key).weekKeys.push(`${w.year}-${w.week}`);
+  }
+  return Array.from(map.values());
+}
+
+// Group weeks into quarters
+function groupByQuarter(allWeeks) {
+  const map = new Map();
+  for (const w of allWeeks) {
+    const approxDate = new Date(w.year, 0, 1 + (w.week - 1) * 7);
+    const q = Math.floor(approxDate.getMonth() / 3);
+    const yr = approxDate.getFullYear();
+    const key = `${yr}-${q}`;
+    if (!map.has(key)) map.set(key, { year: yr, quarter: q, weekKeys: [] });
+    map.get(key).weekKeys.push(`${w.year}-${w.week}`);
+  }
+  return Array.from(map.values());
+}
+
+function phaseClass(phase) {
+  if (phase === 'dev') return 'cell-dev';
+  if (phase === 'test') return 'cell-test';
+  if (phase === 'activation') return 'cell-activation';
+  return '';
+}
+
+function phaseLabel(phase) {
+  if (phase === 'dev') return 'DEV';
+  if (phase === 'test') return 'TEST';
+  if (phase === 'activation') return 'ACTIV';
+  return '';
 }
 
 export default function RoadmapView() {
@@ -147,6 +184,7 @@ export default function RoadmapView() {
   const [project, setProject] = useState(null);
   const [roadmap, setRoadmap] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState('weeks'); // 'weeks' | 'months' | 'quarters'
 
   const canEdit = user?.role === 'admin' || user?.role === 'internal';
 
@@ -163,7 +201,99 @@ export default function RoadmapView() {
   if (loading) return <div className="loading">Chargement...</div>;
   if (!roadmap) return <div className="alert alert-error">Roadmap introuvable</div>;
 
-  const { weeks, lotData } = computeTimeline(roadmap.lots || [], roadmap.weeks_per_sprint || 2);
+  const { allWeeks, lotPhases } = computeWeekPhases(roadmap.lots || [], roadmap.weeks_per_sprint || 2);
+  const months = groupByMonth(allWeeks);
+  const quarters = groupByQuarter(allWeeks);
+
+  const renderTimeline = () => {
+    if (viewMode === 'weeks') {
+      return (
+        <table className="roadmap-table">
+          <thead>
+            <tr>
+              <th className="sticky-col" style={{ left: 0, minWidth: 130 }}>Lot</th>
+              <th className="sticky-col" style={{ left: 130, minWidth: 100 }}>Debut</th>
+              {allWeeks.map(w => (
+                <th key={`${w.year}-${w.week}`}>S{w.week}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {lotPhases.map(({ lot, phases }, i) => (
+              <tr key={i}>
+                <td className="lot-name" style={{ left: 0 }}>{lot.name}</td>
+                <td className="lot-info" style={{ left: 130 }}>{formatDateFR(lot.start_date)}</td>
+                {allWeeks.map(w => {
+                  const key = `${w.year}-${w.week}`;
+                  const phase = phases[key];
+                  return <td key={key} className={phaseClass(phase)}>{phaseLabel(phase)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+    }
+
+    if (viewMode === 'months') {
+      return (
+        <table className="roadmap-table">
+          <thead>
+            <tr>
+              <th className="sticky-col" style={{ left: 0, minWidth: 130 }}>Lot</th>
+              <th className="sticky-col" style={{ left: 130, minWidth: 100 }}>Debut</th>
+              {months.map(m => (
+                <th key={`${m.year}-${m.month}`} style={{ minWidth: 60 }}>
+                  {MONTH_NAMES[m.month]}{months.some(o => o.month === m.month && o.year !== m.year) ? ` ${m.year}` : ''}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {lotPhases.map(({ lot, phases }, i) => (
+              <tr key={i}>
+                <td className="lot-name" style={{ left: 0 }}>{lot.name}</td>
+                <td className="lot-info" style={{ left: 130 }}>{formatDateFR(lot.start_date)}</td>
+                {months.map(m => {
+                  const phase = dominantPhase(m.weekKeys, phases);
+                  return <td key={`${m.year}-${m.month}`} className={phaseClass(phase)}>{phaseLabel(phase)}</td>;
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+    }
+
+    // quarters
+    return (
+      <table className="roadmap-table">
+        <thead>
+          <tr>
+            <th className="sticky-col" style={{ left: 0, minWidth: 130 }}>Lot</th>
+            <th className="sticky-col" style={{ left: 130, minWidth: 100 }}>Debut</th>
+            {quarters.map(q => (
+              <th key={`${q.year}-${q.quarter}`} style={{ minWidth: 70 }}>
+                {QUARTER_NAMES[q.quarter]} {q.year}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {lotPhases.map(({ lot, phases }, i) => (
+            <tr key={i}>
+              <td className="lot-name" style={{ left: 0 }}>{lot.name}</td>
+              <td className="lot-info" style={{ left: 130 }}>{formatDateFR(lot.start_date)}</td>
+              {quarters.map(q => {
+                const phase = dominantPhase(q.weekKeys, phases);
+                return <td key={`${q.year}-${q.quarter}`} className={phaseClass(phase)}>{phaseLabel(phase)}</td>;
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
 
   return (
     <div>
@@ -192,51 +322,45 @@ export default function RoadmapView() {
       {roadmap.lots && roadmap.lots.length > 0 ? (
         <>
           <div className="card">
-            <div className="roadmap-container">
-              <table className="roadmap-table">
-                <thead>
-                  <tr>
-                    <th className="sticky-col" style={{ left: 0, minWidth: 130 }}>Lot</th>
-                    <th className="sticky-col" style={{ left: 130, minWidth: 100 }}>Debut</th>
-                    {weeks.map(w => (
-                      <th key={`${w.year}-${w.week}`}>S{w.week}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {lotData.map(({ lot, phases }, i) => (
-                    <tr key={i}>
-                      <td className="lot-name" style={{ left: 0 }}>{lot.name}</td>
-                      <td className="lot-info" style={{ left: 130 }}>{formatDateFR(lot.start_date)}</td>
-                      {weeks.map(w => {
-                        const key = `${w.year}-${w.week}`;
-                        const phase = phases[key];
-                        let className = '';
-                        let label = '';
-                        if (phase === 'dev') { className = 'cell-dev'; label = 'DEV'; }
-                        else if (phase === 'test') { className = 'cell-test'; label = 'TEST'; }
-                        else if (phase === 'activation') { className = 'cell-activation'; label = 'ACTIV'; }
-                        return <td key={key} className={className}>{label}</td>;
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+              <div className="roadmap-legend">
+                <div className="legend-item">
+                  <div className="legend-color" style={{ background: 'var(--dev-color)' }}></div>
+                  <span>Developpement</span>
+                </div>
+                <div className="legend-item">
+                  <div className="legend-color" style={{ background: 'var(--test-color)' }}></div>
+                  <span>Tests utilisateurs</span>
+                </div>
+                <div className="legend-item">
+                  <div className="legend-color" style={{ background: 'var(--activation-color)' }}></div>
+                  <span>Activation</span>
+                </div>
+              </div>
+              <div className="view-toggle">
+                <button
+                  className={`btn btn-sm ${viewMode === 'weeks' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setViewMode('weeks')}
+                >
+                  Semaines
+                </button>
+                <button
+                  className={`btn btn-sm ${viewMode === 'months' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setViewMode('months')}
+                >
+                  Mois
+                </button>
+                <button
+                  className={`btn btn-sm ${viewMode === 'quarters' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setViewMode('quarters')}
+                >
+                  Trimestres
+                </button>
+              </div>
             </div>
 
-            <div className="roadmap-legend">
-              <div className="legend-item">
-                <div className="legend-color" style={{ background: 'var(--dev-color)' }}></div>
-                <span>Developpement</span>
-              </div>
-              <div className="legend-item">
-                <div className="legend-color" style={{ background: 'var(--test-color)' }}></div>
-                <span>Tests utilisateurs</span>
-              </div>
-              <div className="legend-item">
-                <div className="legend-color" style={{ background: 'var(--activation-color)' }}></div>
-                <span>Activation</span>
-              </div>
+            <div className="roadmap-container">
+              {renderTimeline()}
             </div>
           </div>
 
